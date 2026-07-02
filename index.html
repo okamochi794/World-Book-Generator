@@ -142,13 +142,16 @@
             const [keywordLogic, setKeywordLogic] = useState('_or_');
             const [keywords, setKeywords] = useState('');
             const [group, setGroup] = useState('');
-            const [keyRegion, setKeyRegion] = useState(6); // 初期値を 3（システム+ユーザー）から 6（ユーザー+AI）へ変更
+            const [keyRegion, setKeyRegion] = useState(6);
             const [valueRegion, setValueRegion] = useState(1);
             const [sortOrder, setSortOrder] = useState(0);
             const [depth, setDepth] = useState(0);
             const [probability, setProbability] = useState(100);
             const [matchType, setMatchType] = useState(2);
             const [enable, setEnable] = useState(true);
+
+            // Extraction Rules
+            const [extractionRules, setExtractionRules] = useState("Name: 〇〇\nNPC: 〇〇\n名前：〇〇\nキャラクター『〇〇』\n『〇〇』");
 
             // Content Text
             const [valueText, setValueText] = useState('');
@@ -158,14 +161,45 @@
 
             // テキストからキャラクター名などを抽出する関数
             const extractKeyword = (text) => {
-                const patterns = [
-                    /キャラクター[『「](.+?)[』」]/, // 「キャラクター『〇〇』」
+                // 1. ユーザー定義のパターンを構築（〇〇をキャプチャグループに変換）
+                const userPatterns = extractionRules.split('\n')
+                    .map(rule => rule.trim())
+                    .filter(rule => rule.includes('〇〇'))
+                    .map(rule => {
+                        // 正規表現の特殊文字をエスケープしつつ、スペースの揺れを吸収
+                        const parts = rule.split('〇〇');
+                        const escapedParts = parts.map(p => {
+                            let esc = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                            return esc.replace(/[ \t\u3000]+/g, '\\s*'); // スペースを \s* に置換して柔軟にマッチ
+                        });
+                        
+                        let regexStr = "";
+                        for (let i = 0; i < escapedParts.length - 1; i++) {
+                            // 「〇〇」の後ろに続く文字があるかどうかで貪欲/非貪欲を切り替える
+                            if (i === escapedParts.length - 2 && escapedParts[i+1] === "") {
+                                // 「〇〇」がルールの最後の場合、行の終わりまで取得する（1文字だけで終わらせない）
+                                regexStr += escapedParts[i] + '([^\\n\\r]+)';
+                            } else {
+                                // 「〇〇」の後に括弧などの文字が続く場合は非貪欲に取得する
+                                regexStr += escapedParts[i] + '(.+?)';
+                            }
+                        }
+                        regexStr += escapedParts[escapedParts.length - 1];
+                        return new RegExp(regexStr);
+                    });
+
+                // 2. 既存の強力なフォールバックパターン
+                const builtinPatterns = [
+                    /キャラクター[『「](.+?)[』」]/,
                     /あなたは[、\s]*.*?キャラクター[『「](.+?)[』」]です/,
-                    /『(.+?)』です/, // 「『〇〇』です。」
-                    /名前[：:\s]+([^\n]+)/, // 「名前：〇〇」
-                    /あなたは[「『](.+?)[」』]/ // 「あなたは『〇〇』」
+                    /『(.+?)』です/,
+                    /名前[：:\s]+([^\n\r]+)/,
+                    /あなたは[「『](.+?)[」』]/
                 ];
-                for (let pattern of patterns) {
+
+                const allPatterns = [...userPatterns, ...builtinPatterns];
+
+                for (let pattern of allPatterns) {
                     const match = text.match(pattern);
                     if (match && match[1]) {
                         return match[1].trim();
@@ -344,38 +378,27 @@
 
             const handleCopy = () => {
                 const jsonText = generateJSON();
-                try {
-                    if (navigator.clipboard) {
-                        navigator.clipboard.writeText(jsonText)
-                            .then(() => triggerCopySuccess())
-                            .catch(() => fallbackCopy(jsonText));
-                    } else {
-                        fallbackCopy(jsonText);
-                    }
-                } catch (err) {
-                    fallbackCopy(jsonText);
-                }
-            };
-
-            const fallbackCopy = (text) => {
                 const textArea = document.createElement("textarea");
-                textArea.value = text;
-                textArea.style.position = "fixed"; 
+                textArea.value = jsonText;
+                
+                // 画面外に配置してレイアウト崩れを防ぐ
+                textArea.style.position = "fixed";
+                textArea.style.left = "-9999px";
+                textArea.style.top = "0";
+                
                 document.body.appendChild(textArea);
                 textArea.focus();
                 textArea.select();
+                
                 try {
                     document.execCommand('copy');
-                    triggerCopySuccess();
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
                 } catch (err) {
-                    console.error('Fallback Copy Failed', err);
+                    console.error('Copy Failed', err);
                 }
+                
                 document.body.removeChild(textArea);
-            };
-
-            const triggerCopySuccess = () => {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
             };
 
             const handleClearClick = () => {
@@ -416,7 +439,7 @@
 
                                 {/* File Upload Section */}
                                 <div 
-                                    className={`mb-6 p-5 rounded-xl border-2 border-dashed transition-all duration-200 flex flex-col sm:flex-row items-center justify-between gap-4 ${isDragging ? 'bg-blue-100 border-blue-500 shadow-inner scale-[1.02]' : 'bg-blue-50 border-blue-300 hover:border-blue-400'}`}
+                                    className={`mb-4 p-5 rounded-xl border-2 border-dashed transition-all duration-200 flex flex-col sm:flex-row items-center justify-between gap-4 ${isDragging ? 'bg-blue-100 border-blue-500 shadow-inner scale-[1.02]' : 'bg-blue-50 border-blue-300 hover:border-blue-400'}`}
                                     onDragOver={handleDragOver}
                                     onDragLeave={handleDragLeave}
                                     onDrop={handleDrop}
@@ -432,6 +455,28 @@
                                         <UploadIcon /> ファイルを選択
                                         <input type="file" accept=".txt" multiple className="hidden" onChange={handleFileUpload} />
                                     </label>
+                                </div>
+
+                                {/* Extraction Rules Customization */}
+                                <div className="mb-6 bg-slate-50 p-4 rounded-lg border border-slate-200">
+                                    <details>
+                                        <summary className="text-sm font-semibold text-slate-700 cursor-pointer select-none outline-none">
+                                            ⚙️ キーワード自動抽出ルールのカスタマイズ
+                                        </summary>
+                                        <div className="mt-4 pt-4 border-t border-slate-200">
+                                            <Label tooltip="ファイル読み込み時、このルールに従って〇〇の部分をキーワードとして抽出します。上から順に判定されます。">
+                                                抽出テンプレート（「〇〇」がキーワードになります）
+                                            </Label>
+                                            <textarea
+                                                className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white font-mono resize-y"
+                                                rows={5}
+                                                value={extractionRules}
+                                                onChange={e => setExtractionRules(e.target.value)}
+                                                placeholder="例:&#10;Name: 〇〇&#10;NPC: 〇〇&#10;『〇〇』"
+                                            />
+                                            <p className="text-xs text-slate-500 mt-2">※半角/全角スペースの揺れは自動で吸収されます。</p>
+                                        </div>
+                                    </details>
                                 </div>
 
                                 {/* Meta Settings */}
